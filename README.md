@@ -1,5 +1,5 @@
 # What is it
-Automated workflow for GitHub Actions which builds Aseprite for Windows, Linux, macOS.</br>
+Automated workflow for GitHub Actions which builds Aseprite for Windows, Linux, macOS (depending on choice).</br>
 By using GitHub actions there is no need for manual compilation and it does not contain malware.</br>
 To adhere to the EULA of Aseprite, this workflow does not upload the binary in a public accessible space like artifacts.</br>
 The release can be found within the releases as a draft (only visible for repo owner).
