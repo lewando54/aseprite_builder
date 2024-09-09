@@ -25,7 +25,7 @@ jobs:
       run: |
         data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/latest)
         LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
-        DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[].browser_download_url')
+        DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[].browser_download_url' | grep 'Source.zip')
         VERSION_INFO=$(echo "${data}" | jq -r '.body')
         
         echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
@@ -40,7 +40,7 @@ jobs:
       uses: actions/cache@v3
       with:
         path: ${{ steps.version_info.outputs.latest_tag }}.txt
-        key: cached_version
+        key: cached_version-${{ steps.version_info.outputs.latest_tag }}
     - name: Should we start new build?
       id: should_build
       if: steps.version_check.outputs.cache-hit != 'true'
@@ -68,7 +68,7 @@ jobs:
   build-aseprite:
     name: Build Aseprite
     needs: check-version
-    if: ${{ needs.check-version.outputs.should_build == 'true' }}
+    if: needs.check-version.outputs.should_build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
        matrix:
@@ -94,7 +94,7 @@ jobs:
       - name: Download Aseprite release
         run: |
           curl -o Aseprite-source.zip -L ${{ needs.check-version.outputs.download_url }}
-          unzip Aseprite-source.zip -d aseprite
+          7z x Aseprite-source.zip -oaseprite
           mkdir -p aseprite/build
       - name: (Windows) Setup MSVC
         if: matrix.os == 'windows-latest'
@@ -103,7 +103,6 @@ jobs:
         run: |
           vcpkg install freetype:x64-windows
           echo "FREETYPE_DIR=${{ env.VCPKG_INSTALLATION_ROOT }}/installed/x64-windows" >> $GITHUB_ENV
-      
       - name: Install HarfBuzz
         run: |
           vcpkg install harfbuzz:x64-windows
