@@ -111,12 +111,14 @@ jobs:
       - name: Run CMake
         working-directory: aseprite/build
         run: |
-          cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-                -DCMAKE_IGNORE_PATH="C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/" `
-                -DLAF_BACKEND=skia `
-                -DSKIA_DIR=${{ env.SKIA_DIR }} `
-                -DSKIA_LIBRARY_DIR=${{ env.SKIA_LIBRARY_DIR }} `
-                -G Ninja ..
+            cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+                  -DCMAKE_IGNORE_PATH="C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/" `
+                  -DLAF_BACKEND=skia `
+                  -DSKIA_DIR=${{ env.SKIA_DIR }} `
+                  -DSKIA_LIBRARY_DIR=${{ env.SKIA_LIBRARY_DIR }} `
+                  -DFREETYPE_DIR=${{ env.FREETYPE_DIR }} `
+                  -DHARFBUZZ_DIR=${{ env.HARFBUZZ_DIR }} `
+                  -G Ninja ..
       - name: Run Ninja
         working-directory: aseprite/build
         run: ninja aseprite
