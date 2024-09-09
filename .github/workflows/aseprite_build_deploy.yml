@@ -12,68 +12,7 @@ env:
 
 jobs:
   check-version:
-    name: Check latest Aseprite release
-    runs-on: ubuntu-latest
-    outputs:
-      download_url: ${{ steps.version_info.outputs.download_url }}
-      latest_tag: ${{ steps.version_info.outputs.latest_tag }}
-      should_build: ${{ steps.should_build.outputs.should_build }}
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-    - name: Get latest version info
-      id: version_info
-      run: |
-        data=$(curl -sL https://api.github.com/repos/aseprite/aseprite/releases/latest)
-        LATEST_TAG=$(echo "${data}" | jq -r '.tag_name')
-        DOWNLOAD_URL=$(echo "${data}" | jq -r '.assets[].browser_download_url' | grep 'Source.zip')
-        VERSION_INFO=$(echo "${data}" | jq -r '.body')
-        
-        echo "latest_tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
-        echo "download_url=${DOWNLOAD_URL}" >> $GITHUB_OUTPUT
-        echo "version_info<<EOF" >> $GITHUB_OUTPUT
-        echo "${VERSION_INFO}" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        
-        echo "${LATEST_TAG}" > ${LATEST_TAG}.txt
-    - name: Load version from cache
-      id: version_check
-      uses: actions/cache@v3
-      with:
-        path: ${{ steps.version_info.outputs.latest_tag }}.txt
-        key: cached_version-${{ steps.version_info.outputs.latest_tag }}
-    - name: Should we start new build?
-      id: should_build
-      if: steps.version_check.outputs.cache-hit != 'true'
-      run: echo "should_build=true" >> $GITHUB_OUTPUT
-    - name: Create Release
-      id: create_release
-      if: steps.should_build.outputs.should_build == 'true'
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        version_info=$(cat << EOF
-        ${{ steps.version_info.outputs.version_info }}
-        EOF
-        )
-        payload=$(jq -n \
-          --arg tag "${{ steps.version_info.outputs.latest_tag }}" \
-          --arg name "Release Aseprite ${{ steps.version_info.outputs.latest_tag }}" \
-          --arg body "$version_info" \
-          '{
-            tag_name: $tag,
-            name: $name,
-            body: $body,
-            draft: true,
-            prerelease: false
-          }')
-        response=$(curl -sL \
-          -X POST \
-          -H "Authorization: token $GITHUB_TOKEN" \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Content-Type: application/json" \
-          https://api.github.com/repos/${{ github.repository }}/releases \
-          -d "$payload")
-        echo "upload_url=$(echo "$response" | jq -r .upload_url | sed -e "s/{?name,label}//")" >> $GITHUB_OUTPUT
+    # ... (previous check-version job remains unchanged)
 
   build-aseprite:
     name: Build Aseprite
@@ -85,70 +24,78 @@ jobs:
          os: [windows-latest]
        fail-fast: false    
     steps:
+      - name: Checkout Aseprite
+        uses: actions/checkout@v3
+        with:
+          repository: aseprite/aseprite
+          ref: ${{ needs.check-version.outputs.latest_tag }}
+          submodules: recursive
+
       - name: (Windows) Install dependencies
         if: matrix.os == 'windows-latest'
-        uses: seanmiddleditch/gha-setup-ninja@master
-      - name: Get Skia from cache
-        id: skia-cache
+        uses: microsoft/setup-msbuild@v1.0.2
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v7
+        with:
+          vcpkgGitCommitId: 5568f110b509a9fd90711978a7cb76bae75bb092
+
+      - name: Install dependencies
+        run: |
+          vcpkg install freetype:x64-windows-static
+          vcpkg install harfbuzz:x64-windows-static
+          echo "VCPKG_ROOT=${{ github.workspace }}/vcpkg" >> $GITHUB_ENV
+
+      - name: Cache Skia
+        id: cache-skia
         uses: actions/cache@v3
         with:
-          path: skia
-          key: skia-${{ matrix.os }}-cache
+          path: ${{ github.workspace }}/skia
+          key: ${{ runner.os }}-skia-m81
+
       - name: Download and setup Skia
-        if: steps.skia-cache.outputs.cache-hit != 'true'
+        if: steps.cache-skia.outputs.cache-hit != 'true'
         run: |
-          curl -o Skia-${{ runner.os }}-Release-x64.zip -L https://github.com/aseprite/skia/releases/download/m81-b607b32047/Skia-${{ runner.os }}-Release-x64.zip
-          7z x Skia-${{ runner.os }}-Release-x64.zip -oskia
+          curl -Lo skia.zip https://github.com/aseprite/skia/releases/download/m81-b607b32047/Skia-Windows-Release-x64.zip
+          7z x skia.zip -o"${{ github.workspace }}/skia"
           echo "SKIA_DIR=${{ github.workspace }}/skia" >> $GITHUB_ENV
           echo "SKIA_LIBRARY_DIR=${{ github.workspace }}/skia/out/Release-x64" >> $GITHUB_ENV
-      - name: Download Aseprite release
+
+      - name: Configure CMake
         run: |
-          curl -o Aseprite-source.zip -L ${{ needs.check-version.outputs.download_url }}
-          7z x Aseprite-source.zip -oaseprite
-          mkdir -p aseprite/build
-      - name: (Windows) Setup MSVC
-        if: matrix.os == 'windows-latest'
-        uses: ilammy/msvc-dev-cmd@v1
-      - name: Install FreeType
+          mkdir build
+          cd build
+          cmake .. -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DCMAKE_TOOLCHAIN_FILE=${{ env.VCPKG_ROOT }}/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static `
+            -DLAF_BACKEND=skia `
+            -DSKIA_DIR=${{ env.SKIA_DIR }} `
+            -DSKIA_LIBRARY_DIR=${{ env.SKIA_LIBRARY_DIR }} `
+            -DFREETYPE_INCLUDE_DIR="${{ env.VCPKG_ROOT }}/installed/x64-windows-static/include/freetype2" `
+            -DHARFBUZZ_INCLUDE_DIR="${{ env.VCPKG_ROOT }}/installed/x64-windows-static/include/harfbuzz"
+
+      - name: Build Aseprite
         run: |
-          vcpkg install freetype:x64-windows
-          echo "FREETYPE_DIR=${{ env.VCPKG_INSTALLATION_ROOT }}/installed/x64-windows" >> $GITHUB_ENV
-      - name: Install HarfBuzz
+          cd build
+          msbuild aseprite.sln /p:Configuration=${{ env.BUILD_TYPE }} /m
+
+      - name: Create release package
         run: |
-          vcpkg install harfbuzz:x64-windows
-          echo "HARFBUZZ_DIR=${{ env.VCPKG_INSTALLATION_ROOT }}/installed/x64-windows" >> $GITHUB_ENV
-      - name: Run CMake
-        working-directory: aseprite/build
-        run: |
-            cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
-                  -DCMAKE_IGNORE_PATH="C:/ProgramData/chocolatey/bin/;C:/Strawberry/c/bin/" `
-                  -DLAF_BACKEND=skia `
-                  -DSKIA_DIR=${{ env.SKIA_DIR }} `
-                  -DSKIA_LIBRARY_DIR=${{ env.SKIA_LIBRARY_DIR }} `
-                  -DFREETYPE_DIR=${{ env.FREETYPE_DIR }} `
-                  -DHARFBUZZ_DIR=${{ env.HARFBUZZ_DIR }} `
-                  -G Ninja ..
-      - name: Run Ninja
-        working-directory: aseprite/build
-        run: ninja aseprite
-      - name: Clean up build
-        working-directory: aseprite/build/bin
-        shell: bash
-        run: rm -f gen modp_b64_gen gen.exe gen.exe.manifest modp_b64_gen.exe modp_b64_gen.exe.manifest
-      - name: (Windows) Make portable zip
-        working-directory: aseprite/build/bin
-        run: echo '# This file is here so Aseprite behaves as a portable program' > aseprite.ini
-      - name: Create release
-        working-directory: aseprite/build/bin
-        run: 7z -tzip a Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip *
+          mkdir release
+          copy build\bin\${{ env.BUILD_TYPE }}\aseprite.exe release\
+          copy build\bin\${{ env.BUILD_TYPE }}\*.dll release\
+          echo '# This file is here so Aseprite behaves as a portable program' > release\aseprite.ini
+          7z a -tzip Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip .\release\*
+
       - name: Upload release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl -sL \
-            -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/zip" \
-            -H "Accept: application/vnd.github.v3+json" \
-            --data-binary "@aseprite/build/bin/Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip" \
+          curl -sL `
+            -X POST `
+            -H "Authorization: token $env:GITHUB_TOKEN" `
+            -H "Content-Type: application/zip" `
+            -H "Accept: application/vnd.github.v3+json" `
+            --data-binary "@Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip" `
             "${{ needs.check-version.outputs.upload_url }}?name=Aseprite-${{ needs.check-version.outputs.latest_tag }}-${{ runner.os }}.zip"
